@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import axios from 'axios';
 
 // ملاحظة: تأكد من تغيير هذا الرابط في إعدادات Vercel إلى رابط الـ Backend الخاص بك على Render
-const API_BASE = process.env.REACT_APP_API_URL || "https://tameeni-project.onrender.com";
+const API_BASE = process.env.REACT_APP_API_URL || "https://tameeni-project.onrender.com/api";
 
 function App() {
   const [isAdmin, setIsAdmin] = useState(false);
