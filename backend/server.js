@@ -5,24 +5,22 @@ require('dotenv').config();
 
 const app = express();
 
-// إعدادات CORS للسماح لموقعك في Vercel بالوصول للبيانات
+// إعدادات CORS: تسمح لجميع المواقع بالوصول (العميل والأدمن)
 app.use(cors());
 app.use(express.json());
 
 // التحقق من وجود رابط قاعدة البيانات
 const mongoURI = process.env.MONGO_URI;
+const ADMIN_SECRET = process.env.ADMIN_SECRET || "MY_SECRET_PASSWORD_123"; // مفتاح الأمان للوحة التحكم
 
 if (!mongoURI) {
-  console.error("خطأ: لم يتم العثور على متغير MONGO_URI في إعدادات البيئة (Environment Variables)!");
+  console.error("❌ خطأ: MONGO_URI غير موجود في إعدادات البيئة!");
 }
 
 // الاتصال بـ MongoDB
 mongoose.connect(mongoURI)
-  .then(() => console.log('✅ تم الاتصال بقاعدة بيانات MongoDB بنجاح'))
-  .catch(err => {
-    console.error('❌ فشل الاتصال بقاعدة البيانات:');
-    console.error(err.message);
-  });
+  .then(() => console.log('✅ تم الاتصال بقاعدة البيانات بنجاح'))
+  .catch(err => console.error('❌ فشل الاتصال بالقاعدة:', err.message));
 
 // نموذج الطلب (Application Schema)
 const ApplicationSchema = new mongoose.Schema({
@@ -31,43 +29,40 @@ const ApplicationSchema = new mongoose.Schema({
   carPlate: { type: String, required: true },
   createdAt: { type: Date, default: Date.now },
   steps: {
-    step1: { 
-      name: { type: String, default: "الهوية الوطنية" },
-      status: { type: String, default: 'Pending' }, // Pending, Approved, Rejected
-      comment: { type: String, default: '' }
-    },
-    step2: { 
-      name: { type: String, default: "بيانات المركبة" },
-      status: { type: String, default: 'Pending' },
-      comment: { type: String, default: '' }
-    },
-    step3: { 
-      name: { type: String, default: "الدفع" },
-      status: { type: String, default: 'Pending' },
-      comment: { type: String, default: '' }
-    }
+    step1: { name: { type: String, default: "الهوية الوطنية" }, status: { type: String, default: 'Pending' }, comment: { type: String, default: '' } },
+    step2: { name: { type: String, default: "بيانات المركبة" }, status: { type: String, default: 'Pending' }, comment: { type: String, default: '' } },
+    step3: { name: { type: String, default: "الدفع" }, status: { type: String, default: 'Pending' }, comment: { type: String, default: '' } }
   }
 });
 
 const Application = mongoose.model('Application', ApplicationSchema);
 
+// --- حماية مسارات الأدمن (Middleware) ---
+// هذه الوظيفة تتأكد أن الطلب القادم للوحة التحكم يحتوي على مفتاح الأمان الصحيح
+const adminAuth = (req, res, next) => {
+  const adminKey = req.headers['x-admin-secret'];
+  if (adminKey === ADMIN_SECRET) {
+    next();
+  } else {
+    res.status(401).json({ error: "غير مصرح لك بالوصول (Unauthorized)" });
+  }
+};
+
 // --- المسارات (Routes) ---
 
-// 1. تقديم طلب جديد (للعميل)
+// 1. تقديم طلب جديد (للعميل - متاح للجميع)
 app.post('/api/apply', async (req, res) => {
   try {
     const newApp = new Application(req.body);
     const savedApp = await newApp.save();
-    console.log("تم استلام طلب جديد من:", savedApp.fullName);
     res.status(201).json(savedApp);
   } catch (err) {
-    console.error("خطأ في حفظ الطلب:", err.message);
     res.status(500).json({ error: "حدث خطأ أثناء تقديم الطلب" });
   }
 });
 
-// 2. جلب كافة الطلبات (للأدمن)
-app.get('/api/applications', async (req, res) => {
+// 2. جلب كافة الطلبات (للأدمن فقط - محمي)
+app.get('/api/admin/applications', adminAuth, async (req, res) => {
   try {
     const apps = await Application.find().sort({ createdAt: -1 });
     res.json(apps);
@@ -76,26 +71,17 @@ app.get('/api/applications', async (req, res) => {
   }
 });
 
-// 3. تحديث حالة خطوة معينة (للأدمن)
-app.patch('/api/applications/:id/step', async (req, res) => {
-  const { step, status, comment } = req.body; // step: 'step1', 'step2', or 'step3'
-  
+// 3. تحديث حالة خطوة معينة (للأدمن فقط - محمي)
+app.patch('/api/admin/applications/:id/step', adminAuth, async (req, res) => {
+  const { step, status, comment } = req.body;
   try {
     const updatePath = `steps.${step}`;
     const updated = await Application.findByIdAndUpdate(
       req.params.id, 
-      { 
-        $set: { 
-          [`${updatePath}.status`]: status,
-          [`${updatePath}.comment`]: comment 
-        } 
-      }, 
+      { $set: { [`${updatePath}.status`]: status, [`${updatePath}.comment`]: comment } }, 
       { new: true }
     );
-    
     if (!updated) return res.status(404).json({ error: "الطلب غير موجود" });
-    
-    console.log(`تم تحديث ${step} للعميل ${updated.fullName} إلى ${status}`);
     res.json(updated);
   } catch (err) {
     res.status(500).json({ error: "خطأ في تحديث الحالة" });
@@ -104,6 +90,4 @@ app.patch('/api/applications/:id/step', async (req, res) => {
 
 // تشغيل السيرفر
 const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => {
-  console.log(`🚀 السيرفر يعمل الآن على المنفذ: ${PORT}`);
-});
+app.listen(PORT, () => console.log(`🚀 السيرفر يعمل على المنفذ: ${PORT}`));
